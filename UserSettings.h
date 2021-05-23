@@ -1,6 +1,8 @@
 #ifndef __PROJECT_DEFAULT_H
 #define __PROJECT_DEFAULT_H
 
+
+
 #define DS2482_COUNT 2
 
 //realne 30x 1wire cidlo

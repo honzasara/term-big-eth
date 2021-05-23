@@ -24,7 +24,7 @@
 #define OUTPUT_REAL_MODE_PWM 2
 #define OUTPUT_REAL_MODE_DELAY 3
 
-#define OUTPUT_TYPE_HW 0
+#define OUTPUT_TYPE_HW 2
 #define OUTPUT_TYPE_RS485 1
 
 #define TYPE_FREE 0
@@ -37,13 +37,12 @@
 
 #define MAX_AVG_TEMP 10
 
-#define SELFTEST_ERR_RTC 0
-#define SELFTEST_ERR_NTP 1
 
 
 #define POWER_OUTPUT_ERR 255
 #define POWER_OUTPUT_OFF 254
-#define POWER_OUTPUT_NEGATE 254
+#define POWER_OUTPUT_NEGATE 253
+#define POWER_OUTPUT_ON 252
 
 #define POWER_OUTPUT_HEAT_MAX 10
 #define POWER_OUTPUT_COOL_MAX 11
@@ -58,26 +57,18 @@
 #define set_default_values 90
 
 
-#define my_serial_1_mode 94
-#define my_serial_1_speed 95
-#define my_serial_2_mode 96
-#define my_serial_2_speed 97
+#define my_serial_1_mode 92
+#define my_serial_1_speed_low 93
+#define my_serial_1_speed_high 94
+
+#define my_serial_2_mode 95
+#define my_serial_2_speed_low 96
+#define my_serial_2_speed_high 97
+
 #define my_rs_1_id 98
 #define my_rs_2_id 99
 
 
-#define device_nazev 100 /// 10
-#define device_mac 110  /// 6
-#define device_ip 116   /// 4
-#define device_mask 120 /// 4
-#define device_dns 124 /// 4
-#define device_gw 128 /// 4
-#define device_mqtt_server 132 /// 4
-#define device_mqtt_port 136 /// 2
-#define device_mqtt_user 138 /// 20
-#define device_mqtt_key 158 /// 20
-#define device_ntp_server 178 ///4
-#define nexxxxxt 182
 
 
 
@@ -102,10 +93,12 @@
 #define MAX_TEMP_BUFFER 32
 #define UART_RECV_MAX_SIZE 64
 
-StaticJsonDocument<512> doc;
+StaticJsonDocument<256> doc;
 
 
-
+#define SELFTEST_ERR_RTC 0
+#define SELFTEST_ERR_NTP 1
+#define SELFTEST_MQTT_LINK 6
 
 
 
@@ -128,7 +121,6 @@ uint8_t output_state[MAX_OUTPUT];
 uint8_t output_state_timer[MAX_OUTPUT];
 uint8_t output_mode_now[MAX_OUTPUT];
 uint16_t output_period_timer[MAX_OUTPUT];
-
 
 
 /*
@@ -160,33 +152,35 @@ EthernetUDP udpClient;
 PubSubClient mqtt_client(ethClient);
 NTPClient timeClient(udpClient);
 
-
+long load = 0;
+long load_max = 0;
+long load_min = 0xffffffff;
 
 volatile uint8_t rsid_1;
 volatile uint8_t rsid_2;
-uint16_t uptime = 0;
-long int milis = 0;
-long int milis_005s = 0;
-long int milis_1s = 0;
-long int milis_10s = 0;
-long int milis_key = 0;
-uint32_t load2 = 0;
-uint32_t load_2 = 0;
-uint8_t start_at = 0;
-uint8_t re_at = 0;
-uint8_t r_id = 0;
-char uart_recv[UART_RECV_MAX_SIZE];
+long uptime = 0;
+long  milis = 0;
+long  milis_005s = 0;
+long  milis_1s = 0;
+long  milis_10s = 0;
 
+uint8_t start_2_at = 0;
+uint8_t re_2_at = 0;
+uint8_t r_2_id = 0;
+char uart_2_recv[UART_RECV_MAX_SIZE];
 
-uint8_t timer2_counter;
-uint16_t timer3_counter;
+uint8_t serial_1_mode = 0;
+uint8_t serial_2_mode = 0;
+
+//uint8_t timer2_counter;
+//uint16_t timer3_counter;
 
 
 
 
 uint8_t selftest_data = 0;
 
-uint8_t output_last = 0;
+uint8_t output_last = 255;
 
 
 
@@ -195,12 +189,15 @@ const char thermctl_header_out[] PROGMEM  = "/thermctl-out/";
 const char termbig_header_in[] PROGMEM  = "/termbig-in/";
 const char termbig_header_out[] PROGMEM  = "/termbig-out/";
 const char global_time_set[] PROGMEM = "global/time/set";
-const char global_time_ntp[] PROGMEM = "global/time/ntp_offset";
+const char global_time_ntp[] PROGMEM = "global/time/ntp";
 const char global_time_offset[] PROGMEM = "global/time/offset";
 const char thermctl_subscribe[] PROGMEM = "/ctl/thermctl/subscribe";
 const char termbig_subscribe[] PROGMEM = "/ctl/termbig/subscribe";
+const char termbig_virtual_output[] PROGMEM = "/termbig-out/virtual-output";
 
 void(* resetFunc) (void) = 0; //declare reset function @ address 0
+
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //*************************************************************************************************************************************************//
@@ -254,50 +251,50 @@ void send_at_2(uint8_t id, char *cmd, char *args)
 }
 /////////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
-void read_at(char *input)
+void read_at_2(char *input)
 {
   uint8_t c;
   while (Serial1.available() > 0)
   {
     c = Serial1.read();
     //////////
-    if ( re_at > 0 && re_at < (UART_RECV_MAX_SIZE - 1) )
+    if ( re_2_at > 0 && re_2_at < (UART_RECV_MAX_SIZE - 1) )
     {
       if (c == ';')
       {
-        start_at = 255;
-        re_at = 0;
+        start_2_at = 255;
+        re_2_at = 0;
         break;
-        goto endloop;
+        goto endloop_2;
       }
-      input[re_at - 1] = c;
-      input[re_at] = 0;
-      re_at++;
+      input[re_2_at - 1] = c;
+      input[re_2_at] = 0;
+      re_2_at++;
     };
     //////////
-    if (start_at == 2)
+    if (start_2_at == 2)
       if (c == '+')
-        start_at = 3;
+        start_2_at = 3;
       else
-        start_at = 0;
+        start_2_at = 0;
     //////////
-    if (start_at == 1)
+    if (start_2_at == 1)
       if ( c == 't')
-        start_at = 2;
+        start_2_at = 2;
       else
-        start_at = 0;
+        start_2_at = 0;
     //////////
-    if (start_at == 0)
+    if (start_2_at == 0)
       if (c == 'a')
-        start_at = 1;
+        start_2_at = 1;
     //////////
-    if (start_at == 3)
+    if (start_2_at == 3)
     {
-      re_at = 1;
-      start_at = 4;
+      re_2_at = 1;
+      start_2_at = 4;
     }
     //////////
-endloop:;
+endloop_2:;
   }
 }
 /////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -313,6 +310,38 @@ void ModBus_postTransmission()
   digitalWrite(pin_rs485_1, 0);
   digitalWrite(pin_rs485_1, 0);
 }
+
+/*
+ * ********** Ziskani/Nastaveni rychlosti seriove linky *************
+*/
+uint16_t serial1_get_speed(void)
+{
+  uint16_t speed = 9600;
+  speed = EEPROM.read(my_serial_1_speed_high) << 8 + EEPROM.read(my_serial_1_speed_low);
+  return speed;
+}
+void serial1_set_speed(uint16_t speed)
+{
+  EEPROM.write(my_serial_1_speed_high, speed >> 8);
+  EEPROM.write(my_serial_1_speed_low, (speed & 0xff));
+}
+
+uint16_t serial2_get_speed(void)
+{
+  uint16_t speed = 9600;
+  speed = EEPROM.read(my_serial_2_speed_high) << 8 + EEPROM.read(my_serial_2_speed_low);
+  return speed;
+}
+
+void serial2_set_speed(uint16_t speed)
+{
+  EEPROM.write(my_serial_2_speed_high, speed >> 8);
+  EEPROM.write(my_serial_2_speed_low, (speed & 0xff));
+}
+
+
+
+
 ///////////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////////
 uint8_t time_get_offset(void)
@@ -328,9 +357,10 @@ void time_set_offset(uint8_t offset)
 ///////////////////////////////////////////////////////////////////////////////////////////
 void output_get_name(uint8_t idx, char *name)
 {
-  for (uint8_t i = 0; i < 10; i++)
+  for (uint8_t i = 0; i < 9; i++)
   {
     name[i] = EEPROM.read(output0 + (idx * 20) + i);
+    name[i+1] = 0;
   }
 }
 
@@ -408,6 +438,7 @@ void output_set_all(uint8_t idx, struct_output output)
 {
   output_set_name(idx, output.name);
   output_set_variables(idx, output.used, output.mode_enable, output.type, output.outputs, output.id, output.period);
+  output_set_state(idx, output.state);
 }
 
 //////////
@@ -589,9 +620,50 @@ void send_mqtt_outputs(void)
       send_mqtt_message_prefix_id_topic_payload(&mqtt_client, "output", id, "period", payload);
     }
   }
-
-
 }
+
+void send_mqtt_output_virtual(PubSubClient *mqtt_client_v, const char *topic, const char *payload, uint8_t virtual_id)
+{
+  char t_topic[64];
+  char str1[12];
+  strcpy_P(t_topic, termbig_virtual_output);
+  itoa(virtual_id, str1, 10);
+  strcat(t_topic, "/");
+  strcat(t_topic, str1);
+  strcat(t_topic, "/");
+  strcat(t_topic, topic);
+  send_mqtt_payload(mqtt_client_v, t_topic, payload);
+}
+
+void send_mqtt_outputs_virtual_id(PubSubClient *mqtt_client_v)
+{
+  char payload[64];
+  char topic[64];
+  char name[12];
+  char str1[12];
+  struct_output output;
+  uint8_t tt = 0;
+  for (uint8_t id = 0; id < MAX_OUTPUT; id++)
+  {
+    output_get_all(id, &output);
+    if (output.used != 0)
+    {
+      tt = output.id;
+      send_mqtt_output_virtual(mqtt_client_v, "name", output.name, tt);
+      /*
+      itoa(output.type, str1, 10);
+      send_mqtt_output_virtual(mqtt_client_v, "type", str1, tt);
+      itoa(output.mode-enable, str1, 10);
+      send_mqtt_output_virtual(mqtt_client_v, "mode_enable", str1, tt);
+      */
+      itoa(output.state, str1, 10);
+      send_mqtt_output_virtual(mqtt_client_v, "state", str1, tt);
+    }
+  }
+}
+
+
+
 ////
 //// termbig-out/XXXXX/network/mac
 //// termbig-out/XXXXX/network/ip
@@ -638,7 +710,7 @@ void send_network_config(void)
 }
 ////
 ////////////////////////////////////////////////////////////////////////////////////////////
-void send_mqtt_status(void)
+void send_mqtt_device_status(void)
 {
   char str_topic[64];
   char hostname[10];
@@ -646,37 +718,21 @@ void send_mqtt_status(void)
   if (mqtt_client.connected())
   {
     ///
-    strcpy(str_topic, "status/know_devices");
-    itoa(count_know_mqtt, payload, 10);
-    send_mqtt_general_payload(&mqtt_client, str_topic, payload);
-    ///
     strcpy(str_topic, "status/uptime");
+    //sprintf(payload, "%d", uptime);
     itoa(uptime, payload, 10);
     send_mqtt_general_payload(&mqtt_client, str_topic, payload);
     ///
-    strcpy(str_topic, "status/load");
-    itoa(load2, payload, 10);
+    strcpy(str_topic, "status/load_min");
+    itoa(load_min, payload, 10);
     send_mqtt_general_payload(&mqtt_client, str_topic, payload);
     ///
-    strcpy(str_topic, "status/mqtt/send");
-    itoa(mqtt_send_message, payload, 10);
-    mqtt_send_message = 0;
+    strcpy(str_topic, "status/load_max");
+    itoa(load_max, payload, 10);
     send_mqtt_general_payload(&mqtt_client, str_topic, payload);
     ///
-    strcpy(str_topic, "status/mqtt/error");
-    itoa(mqtt_error, payload, 10);
-    mqtt_error = 0;
-    send_mqtt_general_payload(&mqtt_client, str_topic, payload);
-    ///
-    strcpy(str_topic, "status/mqtt/receive");
-    itoa(mqtt_receive_message, payload, 10);
-    mqtt_receive_message = 0;
-    send_mqtt_general_payload(&mqtt_client, str_topic, payload);
-    ///
-    strcpy(str_topic, "status/mqtt/process");
-    itoa(mqtt_process_message, payload, 10);
-    mqtt_process_message = 0;
-    send_mqtt_general_payload(&mqtt_client, str_topic, payload);
+    load_max = 0;
+    load_min = 0xffffffff;
     ///
     strcpy(str_topic, "status/selftest");
     itoa(selftest_data, payload, 10);
@@ -688,6 +744,7 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
 {
   char str1[64];
   char str2[128];
+  char my_payload[128];
   char tmp1[16];
   boolean ret = 0;
   uint8_t cnt = 0;
@@ -696,7 +753,9 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
   struct_DDS18s20 tds;
   char *pch;
   uint8_t active;
-  for (uint8_t j = 0; j < 128; j++) str2[j] = 0;
+  ///for (uint8_t j = 0; j < 128; j++) str2[j] = 0;
+  for (uint8_t j = 0; j < 128; j++) my_payload[j] = 0;
+  strncpy(my_payload, (char*) payload, length);
   ////
   mqtt_receive_message++;
   active = 0;
@@ -705,9 +764,8 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
   {
     mqtt_process_message++;
     active = 0;
-    strncpy(str2, payload, length);
     for (uint8_t idx = 0; idx < count_know_mqtt; idx++)
-      if (strcmp(know_mqtt[idx].device, str2) == 0)
+      if (strcmp(know_mqtt[idx].device, my_payload) == 0)
       {
         id = idx;
         active = 1;
@@ -721,7 +779,7 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
     {
       know_mqtt[count_know_mqtt].type = TYPE_THERMCTL;
       know_mqtt[count_know_mqtt].last_update = 0;
-      strcpy(know_mqtt[count_know_mqtt].device, str2);
+      strcpy(know_mqtt[count_know_mqtt].device, my_payload);
       count_know_mqtt++;
     }
   }
@@ -732,8 +790,7 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
   if (strcmp(str1, topic) == 0)
   {
     mqtt_process_message++;
-    strncpy(str2, payload, length);
-    deserializeJson(doc, str2);
+    deserializeJson(doc, my_payload);
     JsonObject root = doc.as<JsonObject>();
     if (root.containsKey("year") && root.containsKey("month") && root.containsKey("month") && root.containsKey("hour") && root.containsKey("minute") && root.containsKey("second"))
       rtc.adjust(DateTime(root["year"], root["month"], root["day"], root["hour"], root["minute"], root["second"]));
@@ -765,8 +822,7 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
   if (strcmp(str1, topic) == 0)
   {
     mqtt_process_message++;
-    strncpy(str2, payload, length);
-    time_set_offset(atoi(str2));
+    time_set_offset(atoi(my_payload));
   }
 
 
@@ -777,8 +833,7 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
   if (strcmp(str1, topic) == 0)
   {
     mqtt_process_message++;
-    strncpy(str2, payload, length);
-    id = atoi(str2);
+    id = atoi(my_payload);
     if ( id < Global_HWwirenum)
     {
       for (uint8_t idx = 0; idx < HW_ONEWIRE_MAXDEVICES; idx++)
@@ -791,9 +846,8 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
             tds.rom[i] = w_rom[id].rom[i];
           tds.assigned_ds2482 = w_rom[id].assigned_ds2482;
           set_tds18s20(idx, &tds);
-          for (uint8_t idx = 0; idx < HW_ONEWIRE_MAXROMS; idx++)
-            for (uint8_t cnt = 0; cnt < MAX_AVG_TEMP; cnt++)
-              status_tds18s20[idx].average_temp[cnt] = 20000;
+          for (uint8_t cnt = 0; cnt < MAX_AVG_TEMP; cnt++)
+            status_tds18s20[idx].average_temp[cnt] = 20000;
           break;
         }
       }
@@ -814,7 +868,6 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
   if (strncmp(str1, topic, strlen(str1)) == 0)
   {
     mqtt_process_message++;
-    strncpy(str2, payload, length);
     cnt = 0;
     for (uint8_t f = strlen(str1); f < strlen(topic); f++)
     {
@@ -829,9 +882,9 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
       if (cnt == 0) id = atoi(pch);
       if (id < HW_ONEWIRE_MAXROMS)
       {
-        if ((cnt == 1) && (strcmp(pch, "name") == 0)) tds_set_name(id, str2);
-        if ((cnt == 1) && (strcmp(pch, "offset") == 0)) tds_set_offset(id, atoi(str2));
-        if ((cnt == 1) && (strcmp(pch, "period") == 0)) tds_set_period(id, atoi(str2));
+        if ((cnt == 1) && (strcmp(pch, "name") == 0)) tds_set_name(id, my_payload);
+        if ((cnt == 1) && (strcmp(pch, "offset") == 0)) tds_set_offset(id, atoi(my_payload));
+        if ((cnt == 1) && (strcmp(pch, "period") == 0)) tds_set_period(id, atoi(my_payload));
       }
       else
       {
@@ -851,7 +904,6 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
   if (strncmp(str1, topic, strlen(str1)) == 0)
   {
     mqtt_process_message++;
-    strncpy(str2, payload, length);
     cnt = 0;
     for (uint8_t f = strlen(str1); f < strlen(topic); f++)
     {
@@ -866,14 +918,15 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
       if (cnt == 0) id = atoi(pch);
       if (id < MAX_OUTPUT)
       {
-        if ((cnt == 1) && (strcmp(pch, "used") == 0)) output_update_used(id, atoi(str2));
-        if ((cnt == 1) && (strcmp(pch, "enable-mode") == 0)) output_update_mode_enable(id, atoi(str2));
-        if ((cnt == 1) && (strcmp(pch, "type") == 0)) output_update_type(id, atoi(str2));
-        if ((cnt == 1) && (strcmp(pch, "outputs") == 0)) output_update_outputs(id, atoi(str2));
-        if ((cnt == 1) && (strcmp(pch, "virtual-id") == 0)) output_update_id(id, atoi(str2));
-        if ((cnt == 1) && (strcmp(pch, "name") == 0)) output_set_name(id, str2);
-        if ((cnt == 1) && (strcmp(pch, "period") == 0)) output_update_period(id, atoi(str2));
+        if ((cnt == 1) && (strcmp(pch, "used") == 0)) output_update_used(id, atoi(my_payload));
+        if ((cnt == 1) && (strcmp(pch, "enable-mode") == 0)) output_update_mode_enable(id, atoi(my_payload));
+        if ((cnt == 1) && (strcmp(pch, "type") == 0)) output_update_type(id, atoi(my_payload));
+        if ((cnt == 1) && (strcmp(pch, "outputs") == 0)) output_update_outputs(id, atoi(my_payload));
+        if ((cnt == 1) && (strcmp(pch, "virtual-id") == 0)) output_update_id(id, atoi(my_payload));
+        if ((cnt == 1) && (strcmp(pch, "name") == 0)) output_set_name(id, my_payload);
+        if ((cnt == 1) && (strcmp(pch, "period") == 0)) output_update_period(id, atoi(my_payload));
         if ((cnt == 1) && (strcmp(pch, "reset_period") == 0))output_reset_period_timer(id);
+        if ((cnt == 1) && (strcmp(pch, "direct-output") == 0))shiftout(atoi(my_payload));
       }
       else
       {
@@ -892,8 +945,7 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
   if (strncmp(str1, topic, strlen(str1)) == 0)
   {
     mqtt_process_message++;
-    strncpy(str2, payload, length);
-    id = atoi(str2);
+    id = atoi(my_payload);
     if (id < HW_ONEWIRE_MAXROMS)
       tds_set_clear(id);
     else
@@ -927,88 +979,14 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
   strcat(str1, "/network/set/");
   if (strncmp(str1, topic, strlen(str1)) == 0)
   {
-    mqtt_process_message++;
-    strncpy(str2, payload, length);
-    cnt = 0;
-    for (uint8_t f = strlen(str1); f < strlen(topic); f++)
-    {
-      str1[cnt] = topic[f];
-      str1[cnt + 1] = 0;
-      cnt++;
-    }
-    cnt = 0;
-    pch = strtok (str1, "/");
-    while (pch != NULL)
-    {
-      if (strcmp(pch, "mac") == 0)
-      {
-        parseBytes(str2, ':', device.mac, 6, 10);
-        cnt = 1;
-      }
-      if (strcmp(pch, "ip") == 0)
-      {
-        parseBytes(str2, '.', device.myIP, 4, 10);
-        cnt = 1;
-      }
-      if (strcmp(pch, "netmask") == 0)
-      {
-        parseBytes(str2, '.', device.myMASK, 4, 10);
-        cnt = 1;
-      }
-      if (strcmp(pch, "gw") == 0)
-      {
-        parseBytes(str2, '.', device.myGW, 4, 10);
-        cnt = 1;
-      }
-      if (strcmp(pch, "dns") == 0)
-      {
-        parseBytes(str2, '.', device.myDNS, 4, 10);
-        cnt = 1;
-      }
-      if (strcmp(pch, "ntp") == 0)
-      {
-        parseBytes(str2, '.', device.ntp_server, 4, 10);
-        cnt = 1;
-      }
-      if (strcmp(pch, "mqtt_host") == 0)
-      {
-        parseBytes(str2, '.', device.mqtt_server, 4, 10);
-        cnt = 1;
-      }
-      if (strcmp(pch, "mqtt_port") == 0)
-      {
-        device.mqtt_port = atoi(str2);
-        cnt = 1;
-      }
-      if (strcmp(pch, "mqtt_user") == 0)
-      {
-        strcpy(device.mqtt_user, str2);
-        cnt = 1;
-      }
-      if (strcmp(pch, "mqtt_pass") == 0)
-      {
-        strcpy(device.mqtt_key, str2);
-        cnt = 1;
-      }
-      if (strcmp(pch, "name") == 0)
-      {
-        strcpy(device.nazev, str2);
-        mqtt_reconnect();
-        cnt = 1;
-      }
-      pch = strtok (NULL, "/");
-    }
-
-    if (cnt == 1) save_setup_network();
   }
   /////
   //////// ovladani vystupu
   strcpy_P(str1, termbig_header_in);
-  strcat(str1, "power-output/");
+  strcat(str1, "virtual-output/");
   if (strncmp(str1, topic, strlen(str1)) == 0)
   {
     mqtt_process_message++;
-    strncpy(str2, payload, length);
     cnt = 0;
     for (uint8_t f = strlen(str1); f < strlen(topic); f++)
     {
@@ -1020,14 +998,14 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
     pch = strtok (str1, "/");
     while (pch != NULL)
     {
-      digitalWrite(LED, 0);
+      //digitalWrite(LED, 0);
       if (cnt == 0) id = atoi(pch);
-      if (cnt == 1) if (strcmp(pch, "state") == 0) output_set_function(id, OUTPUT_REAL_MODE_STATE, atoi(str2));
-      if (cnt == 1) if (strcmp(pch, "heat/pwm") == 0) output_set_function(id, OUTPUT_REAL_MODE_PWM, atoi(str2));
-      if (cnt == 1) if (strcmp(pch, "cool/pwm") == 0) output_set_function(id, OUTPUT_REAL_MODE_PWM, atoi(str2));
-      if (cnt == 1) if (strcmp(pch, "fan/pwm") == 0) output_set_function(id, OUTPUT_REAL_MODE_PWM, atoi(str2));
-      if (cnt == 1) if (strcmp(pch, "err/pwm") == 0) output_set_function(id, OUTPUT_REAL_MODE_NONE, atoi(str2));
-      //if (cnt == 1) if (strcmp(pch, "delay") == 0) output_set_function(id, OUTPUT_REAL_MODE_DELAY, atoi(str2));
+      if (cnt == 1) if (strcmp(pch, "state") == 0) output_set_function(id, OUTPUT_REAL_MODE_STATE, atoi(my_payload));
+      if (cnt == 1) if (strcmp(pch, "heat/pwm") == 0) output_set_function(id, OUTPUT_REAL_MODE_PWM, atoi(my_payload));
+      if (cnt == 1) if (strcmp(pch, "cool/pwm") == 0) output_set_function(id, OUTPUT_REAL_MODE_PWM, atoi(my_payload));
+      if (cnt == 1) if (strcmp(pch, "fan/pwm") == 0) output_set_function(id, OUTPUT_REAL_MODE_PWM, atoi(my_payload));
+      if (cnt == 1) if (strcmp(pch, "err/pwm") == 0) output_set_function(id, OUTPUT_REAL_MODE_NONE, atoi(my_payload));
+      //if (cnt == 1) if (strcmp(pch, "delay") == 0) output_set_function(id, OUTPUT_REAL_MODE_DELAY, atoi(my_payload));
       pch = strtok (NULL, "/");
       cnt++;
     }
@@ -1046,7 +1024,7 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
     resetFunc();
   }
 
-  //// thermctl-in/XXXXX/reload
+  //// thermctl-in/XXXXX/bootloader
   strcpy_P(str1, termbig_header_in);
   strcat(str1, device.nazev);
   strcat(str1, "/bootloader");
@@ -1066,8 +1044,7 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
   if (strcmp(str1, topic) == 0)
   {
     mqtt_process_message++;
-    strncpy(str2, payload, length);
-    EEPROM.write(set_default_values, atoi(str2));
+    EEPROM.write(set_default_values, atoi(my_payload));
   }
 }
 
@@ -1075,10 +1052,7 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
 void output_set_function(uint8_t id, uint8_t mode, uint8_t args)
 {
   struct_output output;
-
-  //log_error("zde");
-
-  char str1[8];
+  char str1[16];
   for (uint8_t idx = 0; idx < MAX_OUTPUT; idx++)
   {
     output_get_all(idx, &output);
@@ -1088,7 +1062,7 @@ void output_set_function(uint8_t id, uint8_t mode, uint8_t args)
       {
         output_set_state(idx, args);
         output_set_mode_now(idx, mode);
-        strcpy(str1, "state");
+        strcpy(str1, "set-state");
         send_mqtt_output_quick_state(output.id, str1, args);
       }
 
@@ -1096,7 +1070,7 @@ void output_set_function(uint8_t id, uint8_t mode, uint8_t args)
       {
         output_set_state(idx, args);
         output_set_mode_now(idx, mode);
-        strcpy(str1, "pwm");
+        strcpy(str1, "set-pwm");
         send_mqtt_output_quick_state(output.id, str1, args);
       }
       /*
@@ -1119,8 +1093,7 @@ void send_mqtt_output_quick_state(uint8_t idx, char *mode, uint8_t args)
   char payload[16];
   char str1[8];
 
-  strcpy_P(topic, termbig_header_out);
-  strcat(topic, "output/");
+  strcpy_P(topic, termbig_virtual_output);
   itoa(idx, str1, 10);
   strcat(topic, str1);
   strcat(topic, "/");
@@ -1146,10 +1119,12 @@ uint8_t mode_in_mode_enable(uint8_t mode_enable, uint8_t mode)
 /// nastavi registr vystupniho stavu
 void phy_set_output(uint8_t bite, uint8_t state)
 {
+  //printf("bite: %d, state %d\n", bite, state);
   if (state == 0)
     cbi(output_last, bite);
   else
     sbi(output_last, bite);
+    
   shiftout(output_last);
 }
 ///// zpetne ziska registr vystupniho stavu
@@ -1157,45 +1132,60 @@ uint8_t phy_get_output(uint8_t bite)
 {
   return (output_last & (1 << bite));
 }
-///////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////////////////////
 void update_phy_output(void)
 {
   struct_output output;
+  //printf("here\n");
+  
   for (uint8_t idx = 0; idx < MAX_OUTPUT; idx++)
   {
     output_get_all(idx, &output);
+    //if (idx == 0)
+    //printf("idx %d ; mode-now %d ; type %d\n", idx, output.mode_now, output.type);
+    
     if (output.mode_now == OUTPUT_REAL_MODE_STATE)
     {
       if (output.type == OUTPUT_TYPE_HW)
       {
         for (uint8_t oid = 0; oid < 8; oid++)
-          if (output.outputs & (1 << idx) != 0)
+          if ((output.outputs & (1 << oid)) != 0)
           {
-            if (output.state == POWER_OUTPUT_OFF) phy_set_output(idx, 1);
-            if (output.state == POWER_OUTPUT_ERR) phy_set_output(idx, 1);
-            if (output.state == POWER_OUTPUT_HEAT_MAX) phy_set_output(idx, 0);
-            if (output.state == POWER_OUTPUT_COOL_MAX) phy_set_output(idx, 0);
-            if (output.state == POWER_OUTPUT_FAN_MAX) phy_set_output(idx, 0);
+            //printf("output.state %d oid %d\n", output.state, oid);
+            if (output.state == POWER_OUTPUT_OFF) phy_set_output(oid, 1);
+            if (output.state == POWER_OUTPUT_ERR) phy_set_output(oid, 1);
+            if (output.state == POWER_OUTPUT_HEAT_MAX) phy_set_output(oid, 0);
+            if (output.state == POWER_OUTPUT_COOL_MAX) phy_set_output(oid, 0);
+            if (output.state == POWER_OUTPUT_FAN_MAX) phy_set_output(oid, 0);
             if (output.state == POWER_OUTPUT_NEGATE)
             {
-              if (phy_get_output(idx) == 0) phy_set_output(idx, 1);
-              else phy_set_output(idx, 0);
+              if (phy_get_output(oid) == 0) 
+                {
+                  phy_set_output(oid, 1);
+                  output.state = POWER_OUTPUT_OFF;
+                }
+              else 
+              {
+                phy_set_output(oid, 0);
+                output.state = POWER_OUTPUT_ON;
+              }
+             output_set_all(idx, output); 
             }
           }
       }
     }
     //////
-    if (output.type == OUTPUT_REAL_MODE_PWM)
+    if (output.mode_now == OUTPUT_REAL_MODE_PWM)
     {
       if (output.type == OUTPUT_TYPE_HW)
       {
         for (uint8_t oid = 0; oid < 8; oid++)
-          if (output.outputs & (1 << idx) != 0)
+          if ((output.outputs & (1 << oid)) != 0)
           {
             if (output.state > output.state_timer)
-              phy_set_output(idx, 0); /// vystupy do zapnuto
+              phy_set_output(oid, 0); /// vystupy do zapnuto
             else
-              phy_set_output(idx, 1); /// vystupy do vypnuto
+              phy_set_output(oid, 1); /// vystupy do vypnuto
           }
       }
     }
@@ -1246,13 +1236,52 @@ boolean mqtt_reconnect(void)
     mqtt_client.subscribe(topic);
 
     strcpy_P(topic, termbig_header_in);
-    strcat(topic, "power-output/#");
+    strcat(topic, "virtual-output/#");
     mqtt_client.subscribe(topic);
   }
   return ret;
 }
 
+///////////// kontrolni funkce ///////////////////////////
+/// selftest_set_0 - nastaveni chyboveho flagu
+/*
+   what - jaky chybovy flag
+*/
+void selftest_set_0(uint8_t what)
+{
+  sbi(selftest_data, what) ;
+}
+///
+/// selftest_clear_0 - vymazani chyboveho flagu, problem jiz neni
+/*
+   what - jaky chybovy flag
+*/
+void selftest_clear_0(uint8_t what)
+{
+  cbi(selftest_data, what) ;
+}
+///
+/// selftest_get_0 - flag je v jakem stavu
+/*
+   what - jaky chybovy flag
 
+   return
+     ... 0 - neni oznacen jako chybny
+     ... neni 0 - chybny flag
+*/
+uint8_t selftest_get_0(uint8_t what)
+{
+  return selftest_data & (1 << what);
+}
+
+
+void selftest(void)
+{
+  if (!rtc.isrunning())
+    selftest_set_0(SELFTEST_ERR_RTC);
+  else
+    selftest_clear_0(SELFTEST_ERR_RTC);
+}
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void setup()
@@ -1261,6 +1290,8 @@ void setup()
   char tmp2[20];
   uint8_t itmp;
   boolean bol;
+
+  long milis;
 
   wdt_enable(WDTO_8S);
   wdt_reset();
@@ -1273,8 +1304,10 @@ void setup()
 
   pinMode(ETH_RST, OUTPUT);
   digitalWrite(ETH_RST, LOW);
-  for (uint16_t i = 0; i < 8024; i++);
+  for (uint16_t i = 0; i < 1024; i++);
   digitalWrite(ETH_RST, HIGH);
+
+
 
 
 
@@ -1293,27 +1326,11 @@ void setup()
   digitalWrite(LED, 1);
   digitalWrite(OE, 0);
 
-  TCCR3A = 0;
-  TCCR3B  = (1 << CS31);
-  timer3_counter = 63536  ;/// cca 1khz
-  TCNT3 = timer3_counter;
-  TIMSK3 |= (1 << TOIE3);
-
-  TCCR2A = 0;
-  TCCR2B  = (1 << CS22) | (1 << CS21) | (1 << CS20); /// delicka 128
-  TIMSK2 |= (1 << TOIE2);
 
   interrupts();
   SPI.begin();
   rtc.begin();
-  Serial.begin(9600);
-  Serial1.begin(9600);
 
-  // Modbus slave ID 1
-  node.begin(1, Serial);
-  // Callbacks allow us to configure the RS485 transceiver correctly
-  node.preTransmission(ModBus_preTransmission);
-  node.postTransmission(ModBus_postTransmission);
 
 
 
@@ -1345,8 +1362,15 @@ void setup()
           output_set_variables(idx, 0, OUTPUT_REAL_MODE_NONE, 0, 0, 0, PERIOD_50_MS);
         }
         rtc.adjust(DateTime(2020, 3, 4, 17, 14, 0));
-        device.mac[0] = 2; device.mac[1] = 4; device.mac[2] = 2; device.mac[3] = 3; device.mac[4] = 4; device.mac[5] = 101;
-        device.myIP[0] = 192; device.myIP[1] = 168; device.myIP[2] = 2; device.myIP[3] = 101;
+        device.mac[0] = 2; device.mac[1] = 44; device.mac[2] = 112; device.mac[3] = analogRead(A4) * analogRead(A7); device.mac[4] = analogRead(A4); device.mac[5] = analogRead(A7);
+        uint8_t ip4 = 0;
+        uint8_t f = 0;
+        while (f == 0)
+        {
+          ip4 = analogRead(A7);
+          if (ip4 > 210 && ip4 < 250) f = 1;
+        }
+        device.myIP[0] = 192; device.myIP[1] = 168; device.myIP[2] = 2; device.myIP[3] = ip4;
         device.myMASK[0] = 255; device.myMASK[1] = 255; device.myMASK[2] = 255; device.myMASK[3] = 0;
         device.myGW[0] = 192; device.myGW[1] = 168; device.myGW[2] = 2; device.myGW[3] = 1;
         device.myDNS[0] = 192; device.myDNS[1] = 168; device.myDNS[2] = 2; device.myDNS[3] = 1;
@@ -1356,10 +1380,13 @@ void setup()
         strcpy(device.mqtt_user, "saric");
         strcpy(device.mqtt_key, "no");
         save_setup_network();
-        device_set_name("TERMBIG1");
+        device_set_name("TERMBIG2");
         char hostname[10];
         device_get_name(hostname);
-        time_set_offset(1);
+        time_set_offset(2);
+
+        serial1_set_speed(9600);
+        serial2_set_speed(9600);
       }
     }
     ///
@@ -1370,8 +1397,7 @@ void setup()
     ///
     if (inic == 2)
     {
-      rsid_1 = EEPROM.read(my_rs_1_id);
-      rsid_2 = EEPROM.read(my_rs_2_id);
+
       for (uint8_t idx = 0; idx < 32; idx++)
       {
         strcpy(know_mqtt[idx].device, "");
@@ -1423,9 +1449,11 @@ void setup()
     {
       if (!rtc.isrunning())
       {
+        selftest_set_0(SELFTEST_ERR_RTC);
       }
       else
       {
+        selftest_clear_0(SELFTEST_ERR_RTC);
       }
     }
     ///
@@ -1450,18 +1478,47 @@ void setup()
     {
       mqtt_client.setServer(device.mqtt_server, device.mqtt_port);
       mqtt_client.setCallback(mqtt_callback);
-
+      send_mqtt_set_header(termbig_header_out);
+      milis = millis();
+      while ((millis() - milis) < 3000 )
+      {
+        mqtt_client.loop();
+        if (mqtt_reconnect() == 0)
+        {
+          selftest_clear_0(SELFTEST_MQTT_LINK);
+          break;
+        }
+        else
+          selftest_set_0(SELFTEST_MQTT_LINK);
+      }
     }
     ///
     if (inic == 11)
     {
+      rsid_1 = EEPROM.read(my_rs_1_id);
+      rsid_2 = EEPROM.read(my_rs_2_id);
 
+      serial_1_mode = EEPROM.read(my_serial_1_mode);
+      serial_2_mode = EEPROM.read(my_serial_2_mode);
+
+      Serial.begin(serial1_get_speed());
+      Serial1.begin(serial2_get_speed());
+
+      // Modbus slave ID 1
+      node.begin(1, Serial);
+      // Callbacks allow us to configure the RS485 transceiver correctly
+      node.preTransmission(ModBus_preTransmission);
+      node.postTransmission(ModBus_postTransmission);
     }
 
     if (inic == 14)
     {
     }
   }
+
+  milis_10s = millis();
+  milis_1s = millis();
+  milis_005s = millis();
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
@@ -1503,6 +1560,8 @@ void loop()
     /termbig/XXXXX/output/set/IDcko/id - nastaveni virtualniho kanalu
   */
 
+  unsigned long load_now, load;
+
 
   char str1[MAX_TEMP_BUFFER];
   char str2[MAX_TEMP_BUFFER];
@@ -1510,15 +1569,18 @@ void loop()
 
   wdt_reset();
 
-  load_2++;
+  load_now = millis();
+
+
 
   //// obsluha prijatych prikazu pro full rs485
-  read_at(uart_recv);
-  if (start_at == 255)
+  read_at_2(uart_2_recv);
+  if (start_2_at == 255)
   {
-    start_at = 0;
-    new_parse_at(uart_recv, str1, str2);
+    start_2_at = 0;
+    new_parse_at(uart_2_recv, str1, str2);
   }
+
 
   /*
     //// zjisteni stavu sitove linky
@@ -1530,17 +1592,20 @@ void loop()
     //// zjisteni stavu mqtt klienta
     if (link_status == 1)
     {
-      if (!mqtt_client.connected())
-        mqtt_reconnect();
-      else
-        mqtt_status = 1;
+  */
+  if (!mqtt_client.connected())
+    mqtt_reconnect();
+  /*
+    else
+      mqtt_status = 1;
     }
     else
     {
-      mqtt_client.disconnect();
-      mqtt_status = 0;
+    mqtt_client.disconnect();
+    mqtt_status = 0;
     }
   */
+
 
   /// zjistim jestli nejsou nove data
   mqtt_client.loop();
@@ -1560,29 +1625,37 @@ void loop()
 
   ////////////////////
   /// kazdych 10sec
-  if ((milis - milis_10s) > 10000)
+
+  if  ((millis() - milis_10s) >= 10000)
   {
-    milis_10s = milis;
+    milis_10s += 10000;
+    selftest();
     send_mqtt_onewire();
-    send_mqtt_status();
+    send_mqtt_status(&mqtt_client);
+    send_mqtt_device_status();
     send_mqtt_tds();
     send_mqtt_outputs();
+    ///
   }
   ////////////////////
   /// kazdych 10ms
-  if ((milis - milis_005s) > 10)
+  if ((millis() - milis_005s) >= 100 )
   {
-    milis_005s = milis;
+    milis_005s += 100;
     update_phy_output();
   }
   ////////////////////
   /// kazdou 1sec
-  if ((milis - milis_1s) > 1000)
+  if ((millis() - milis_1s) >= 1000)
   {
+    milis_1s += 1000;
     now = rtc.now();
-    milis_1s = milis;
     uptime++;
-    digitalWrite(LED, 1);
+    if (uptime % 2)
+      digitalWrite(LED, 1);
+    else
+      digitalWrite(LED, LOW);
+
     mereni_hwwire(uptime);
 
     strcpy_P(str2, termbig_subscribe);
@@ -1590,7 +1663,13 @@ void loop()
     send_mqtt_payload(&mqtt_client, str2, str1);
 
     update_know_mqtt_device();
+    send_mqtt_outputs_virtual_id(&mqtt_client);
   }
+
+
+  load = millis() - load_now;
+  if (load < load_min) load_min = load;
+  if (load > load_max) load_max = load;
 
 }
 
@@ -1616,8 +1695,10 @@ void shiftout(uint8_t data)
 //////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////
 /// obsuha preruseni
-ISR(TIMER2_OVF_vect)
-{
+
+/*
+  ISR(TIMER2_OVF_vect)
+  {
   uint8_t backup = SREG;
   timer2_counter++;
   if (timer2_counter < 30)
@@ -1625,15 +1706,19 @@ ISR(TIMER2_OVF_vect)
   load2 = load_2;
   load_2 = 0;
   SREG = backup;
-}
+  }
 
-ISR(TIMER3_OVF_vect)
-{
+  ISR(TIMER3_OVF_vect)
+  {
   uint8_t backup = SREG;
   TCNT3 = timer3_counter;   // preload timer
   milis++;
+
   for (uint8_t idx = 0; idx < MAX_OUTPUT; idx++)
     output_inc_period_timer(idx);
+
   SREG = backup;
-}
+  }
+
+*/
 /////////////////////////////////////////////////////////
