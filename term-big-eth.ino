@@ -19,10 +19,7 @@
 
 #define PERIOD_50_MS 50
 
-#define OUTPUT_REAL_MODE_NONE 0
-#define OUTPUT_REAL_MODE_STATE 1
-#define OUTPUT_REAL_MODE_PWM 2
-#define OUTPUT_REAL_MODE_DELAY 3
+
 
 #define OUTPUT_TYPE_HW 2
 #define OUTPUT_TYPE_RS485 1
@@ -42,14 +39,7 @@
 #define SERIAL_MODE_MODBUS_MASTER 1
 #define SERIAL_MODE_AT_RS 2
 
-#define POWER_OUTPUT_ERR 255
-#define POWER_OUTPUT_OFF 254
-#define POWER_OUTPUT_NEGATE 253
-#define POWER_OUTPUT_ON 252
 
-#define POWER_OUTPUT_HEAT_MAX 10
-#define POWER_OUTPUT_COOL_MAX 11
-#define POWER_OUTPUT_FAN_MAX 12
 
 
 #define bootloader_tag 0
@@ -121,6 +111,7 @@ typedef struct struct_output
 };
 
 
+uint8_t index_update_output;
 uint8_t output_state[MAX_OUTPUT];
 uint8_t output_state_timer[MAX_OUTPUT];
 
@@ -144,6 +135,7 @@ uint8_t output_mode_now[MAX_OUTPUT];
    17 - virtualni id
 */
 
+const char text_build_version[] PROGMEM = "build version: %d.%02d.%02d %02d:%02d:%02d";
 
 
 ModbusMaster node;
@@ -592,37 +584,30 @@ void send_mqtt_tds(void)
   struct_DDS18s20 tds;
   char payload[64];
   char tmp1[4];
-  int tt;
-  long avg = 0;
 
   for (uint8_t id = 0; id < HW_ONEWIRE_MAXROMS; id++)
     if (get_tds18s20(id, &tds) == 1)
       if (tds.used == 1)
       {
-        tt = status_tds18s20[id].temp / 10;
-        itoa(tt, payload, 10);
+        itoa(status_tds18s20[id].temp, payload, 10);
         send_mqtt_message_prefix_id_topic_payload(&mqtt_client, "tds", id, "temp", payload);
         ///
-        avg = 0;
-        for (uint8_t c = 0; c < MAX_AVG_TEMP; c++) avg = avg + status_tds18s20[id].average_temp[c];
-        avg = avg / MAX_AVG_TEMP;
-        avg = avg / 10;
-        itoa(avg, payload, 10);
+        itoa(status_tds18s20[id].average_temp_now, payload, 10);
         send_mqtt_message_prefix_id_topic_payload(&mqtt_client, "tds", id, "temp_avg", payload);
         ///
         strcpy(payload, tds.name);
         send_mqtt_message_prefix_id_topic_payload(&mqtt_client, "tds", id, "name", payload);
-        tt = tds.offset;
-        itoa(tt, payload, 10);
+        ///
+        itoa(tds.offset, payload, 10);
         send_mqtt_message_prefix_id_topic_payload(&mqtt_client, "tds", id, "offset", payload);
         payload[0] = 0;
         createString(payload, ':', tds.rom, 8, 16, 2);
         send_mqtt_message_prefix_id_topic_payload(&mqtt_client, "tds", id, "rom", payload);
-        tt = tds.period;
-        itoa(tt, payload, 10);
+        ///
+        itoa(tds.period, payload, 10);
         send_mqtt_message_prefix_id_topic_payload(&mqtt_client, "tds", id, "period", payload);
-        tt = (uptime & 0xff) - status_tds18s20[id].period_now;
-        itoa(tt, payload, 10);
+        ///
+        itoa(status_tds18s20[id].period_now, payload, 10);
         send_mqtt_message_prefix_id_topic_payload(&mqtt_client, "tds", id, "start_at", payload);
         itoa(tds.assigned_ds2482, payload, 10);
         send_mqtt_message_prefix_id_topic_payload(&mqtt_client, "tds", id, "assigned", payload);
@@ -636,6 +621,8 @@ void send_mqtt_tds(void)
           strcpy(payload, "false");
           send_mqtt_message_prefix_id_topic_payload(&mqtt_client, "tds", id, "online", payload);
         }
+        itoa(status_tds18s20[id].crc_error, payload, 10);
+        send_mqtt_message_prefix_id_topic_payload(&mqtt_client, "tds", id, "crc_error", payload);
       }
 
 }
@@ -696,15 +683,19 @@ void send_mqtt_output_virtual(PubSubClient *mqtt_client_v, const char *topic, co
   char t_topic[64];
   char str1[12];
   strcpy_P(t_topic, termbig_virtual_output);
-  itoa(virtual_id, str1, 10);
   strcat(t_topic, "/");
+  itoa(virtual_id, str1, 10);
   strcat(t_topic, str1);
+  
   strcat(t_topic, "/");
   strcat(t_topic, topic);
   send_mqtt_payload(mqtt_client_v, t_topic, payload);
 }
 
-void send_mqtt_outputs_virtual_id(PubSubClient *mqtt_client_v)
+///   /termbig-out/virtual-output/VIRTUAL_ID/TOPIC_NAME
+
+
+void send_mqtt_outputs_virtual_id(PubSubClient *mqtt_client_v, uint8_t id)
 {
   char payload[64];
   char topic[64];
@@ -713,8 +704,8 @@ void send_mqtt_outputs_virtual_id(PubSubClient *mqtt_client_v)
   struct_output output;
   uint8_t tt = 0;
 
-  for (uint8_t id = 0; id < MAX_OUTPUT; id++)
-  {
+ // for (uint8_t id = 0; id < MAX_OUTPUT; id++)
+ // {
     output_get_all(id, &output);
     if (output.used != 0)
     {
@@ -729,9 +720,7 @@ void send_mqtt_outputs_virtual_id(PubSubClient *mqtt_client_v)
       itoa(output.state, str1, 10);
       send_mqtt_output_virtual(mqtt_client_v, "state", str1, tt);
     }
-  }
-
-
+  //}
 }
 
 
@@ -792,7 +781,7 @@ void send_mqtt_device_status(void)
     ///
     strcpy(str_topic, "status/uptime");
     //sprintf(payload, "%ld", uptime);
-    itoa(uptime, payload, 10);
+    ltoa(uptime, payload, 10);
     send_mqtt_general_payload(&mqtt_client, str_topic, payload);
     ///
     strcpy(str_topic, "status/load_min");
@@ -809,6 +798,10 @@ void send_mqtt_device_status(void)
     strcpy(str_topic, "status/selftest");
     itoa(selftest_data, payload, 10);
     send_mqtt_general_payload(&mqtt_client, str_topic, payload);
+
+    long time_now = DateTime(__DATE__, __TIME__).unixtime();
+    sprintf(payload, "%ld", time_now);
+    send_mqtt_general_payload(&mqtt_client, "status/build_time", payload);
   }
 }
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -826,6 +819,7 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
   char *pch;
   uint8_t active;
   long time_diff;
+  DateTime now_time;
   ///for (uint8_t j = 0; j < 128; j++) str2[j] = 0;
   for (uint8_t j = 0; j < 128; j++) my_payload[j] = 0;
   strncpy(my_payload, (char*) payload, length);
@@ -895,7 +889,7 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
   if (strcmp(str1, topic) == 0)
   {
     mqtt_process_message++;
-    ntp_diff_rtc(&timeClient, &rtc, time_get_offset(), &time_diff);
+    ntp_diff_rtc(&timeClient, &rtc, time_get_offset(), &time_diff, &now_time);
 
     strcpy_P(str1, text_time_diff);
     itoa(time_diff, str2, 10);
@@ -1541,10 +1535,10 @@ void setup()
         know_mqtt[idx].last_update = 0;
       }
       count_know_mqtt = 0;
-      //// kvuli lepsimu nabehu pocitani nastavim vychozi hodnotu na 2000 = 20 stupnu
+      //// kvuli lepsimu nabehu pocitani nastavim vychozi hodnotu na 200 = 20 stupnu
       for (uint8_t idx = 0; idx < HW_ONEWIRE_MAXROMS; idx++)
         for (uint8_t cnt = 0; cnt < MAX_AVG_TEMP; cnt++)
-          status_tds18s20[idx].average_temp[cnt] = 20000;
+          status_tds18s20[idx].average_temp[cnt] = 200;
 
       for (uint8_t idx = 0; idx < MAX_OUTPUT; idx++)
       {
@@ -1554,6 +1548,7 @@ void setup()
         output_state_timer[idx] = 0;
         output_period_timer[idx] = 0;
       }
+      index_update_output = 0;
     }
     ///
     if (inic == 3)
@@ -1622,14 +1617,14 @@ void setup()
     ///
     if (inic == 11)
     {
-      mqtt_client.setSocketTimeout(1);
-      mqtt_client.setKeepAlive(1000);
+      mqtt_client.setSocketTimeout(5);
+      mqtt_client.setKeepAlive(10);
       mqtt_client.setServer(device.mqtt_server, device.mqtt_port);
       mqtt_client.setCallback(mqtt_callback);
       send_mqtt_set_header(termbig_header_out);
       milis = millis();
       selftest_set_0(SELFTEST_MQTT_LINK);
-      while (((millis() - milis) < 3000)  && (link_status == 1))
+      while (((millis() - milis) < 5000)  && (link_status == 1))
       {
         if (mqtt_reconnect() == true)
         {
@@ -1838,14 +1833,18 @@ void loop()
     else
       digitalWrite(LED, LOW);
 
-    mereni_hwwire(uptime);
+    mereni_hwwire();
 
     strcpy_P(str2, termbig_subscribe);
     device_get_name(str1);
     send_mqtt_payload(&mqtt_client, str2, str1);
 
     update_know_mqtt_device();
-    send_mqtt_outputs_virtual_id(&mqtt_client);
+    
+    send_mqtt_outputs_virtual_id(&mqtt_client, index_update_output);
+    index_update_output++;
+    if (index_update_output>(MAX_OUTPUT-1))
+      index_update_output=0;
   }
 
   load = millis() - load_now;
